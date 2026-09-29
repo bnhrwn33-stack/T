@@ -1,0 +1,505 @@
+<!doctype html>
+<html dir="rtl" lang="he">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#02060d">
+<title>HoloScan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#02060d; --fg:#e6fbff; --muted:#7fb3c2; --accent:#27e8ff; --accent2:#ff4fd8; --panel:rgba(4,20,32,.72); --line:rgba(39,232,255,.35); }
+  * { box-sizing:border-box; margin:0; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; background:var(--bg); color:var(--fg); font-family:'Heebo',system-ui,sans-serif; }
+  canvas { position:fixed; inset:0; display:block; touch-action:none; }
+  .hidden { display:none !important; }
+  button { font:inherit; font-weight:600; border:1px solid var(--accent); background:rgba(39,232,255,.12); color:var(--fg); border-radius:14px; padding:14px 18px; min-height:48px; cursor:pointer; }
+  button.primary { background:var(--accent); color:#001419; border-color:var(--accent); font-weight:800; }
+  button:disabled { opacity:.4; }
+  button:focus-visible { outline:3px solid var(--accent2); outline-offset:2px; }
+
+  #menu { position:fixed; inset:0; display:flex; flex-direction:column; justify-content:center; gap:14px; padding:24px 16px calc(24px + env(safe-area-inset-bottom)); background:radial-gradient(circle at 50% 30%, rgba(39,232,255,.15), transparent 60%), rgba(2,6,13,.55); }
+  #menu h1 { font-size:44px; font-weight:800; text-align:center; letter-spacing:1px; color:var(--accent); text-shadow:0 0 18px var(--accent); }
+  #menu p { color:var(--muted); text-align:center; line-height:1.5; }
+  #menu .btns { display:flex; flex-direction:column; gap:10px; max-width:420px; width:100%; margin:8px auto 0; }
+  #msg { min-height:1.5em; color:#ffc46b !important; font-size:14px; }
+
+  .stats { position:fixed; top:calc(10px + env(safe-area-inset-top)); inset-inline:16px; display:grid; grid-template-columns:repeat(4,1fr); gap:6px; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:6px 4px; text-align:center; backdrop-filter:blur(6px); }
+  .stat b { display:block; font-size:18px; color:var(--accent); font-variant-numeric:tabular-nums; }
+  .stat span { font-size:11px; color:var(--muted); }
+  .bottom { position:fixed; bottom:calc(16px + env(safe-area-inset-bottom)); inset-inline:16px; display:flex; flex-direction:column; gap:10px; align-items:stretch; }
+  .hint { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:10px 12px; text-align:center; font-size:14px; }
+  .row { display:flex; gap:10px; } .row > * { flex:1; }
+
+  #arHud { position:fixed; inset:0; pointer-events:none; }
+  #arHud button { pointer-events:auto; }
+  #reticle { position:fixed; left:50%; top:50%; width:64vmin; height:64vmin; transform:translate(-50%,-50%); border:1px solid var(--line); border-radius:20px; overflow:hidden; }
+  #reticle::before { content:''; position:absolute; inset-inline:0; height:3px; background:var(--accent); box-shadow:0 0 16px 4px var(--accent); animation:sweep 2s linear infinite; }
+  #reticle::after { content:''; position:absolute; left:50%; top:50%; width:14px; height:14px; transform:translate(-50%,-50%); border:2px solid var(--accent2); border-radius:50%; }
+  @keyframes sweep { from { top:0 } to { top:100% } }
+  #mode { position:fixed; top:calc(76px + env(safe-area-inset-top)); inset-inline:16px; text-align:center; font-size:12px; color:var(--muted); }
+  #toast { position:fixed; top:38%; left:50%; transform:translate(-50%,-50%) scale(.8); opacity:0; transition:.35s; font-size:26px; font-weight:800; color:var(--accent2); text-shadow:0 0 16px var(--accent2); white-space:nowrap; }
+  #toast.show { opacity:1; transform:translate(-50%,-50%) scale(1); }
+  .pulse { animation:pulse .3s; } @keyframes pulse { 50% { transform:scale(1.15) } }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+
+<section id="menu" aria-label="תפריט ראשי">
+  <h1>HoloScan</h1>
+  <p>הסתובב בבית עם הטלפון – המצלמה וחיישני העומק סורקים את החדר ובונים ממנו הולוגרמה תלת־ממדית מריבועים קטנים.</p>
+  <div class="btns">
+    <button class="primary" id="btnStart">התחל סריקה</button>
+    <button id="btnLast" class="hidden">צפה בסריקה האחרונה</button>
+    <button id="btnDemo">מצב הדגמה (בלי סריקה)</button>
+  </div>
+  <p id="msg" role="status" aria-live="polite"></p>
+  <p style="font-size:13px">טיפ: זוז לאט, כוון לקירות, לרצפה ולרהיטים, ושמור על תאורה טובה. לסיום הסריקה אפשר גם ללחוץ על כפתור "חזור" של הטלפון.</p>
+</section>
+
+<!-- שכבת HUD בזמן AR – משמשת כ-dom-overlay -->
+<section id="arHud" class="hidden" aria-label="מסך סריקה">
+  <div class="stats">
+    <div class="stat"><b id="sVox">0</b><span>ריבועים</span></div>
+    <div class="stat"><b id="sArea">0</b><span>מ"ר מכוסה</span></div>
+    <div class="stat"><b id="sLvl">1</b><span>רמה</span></div>
+    <div class="stat"><b id="sTime">0:00</b><span>זמן</span></div>
+  </div>
+  <div id="mode"></div>
+  <div id="reticle" aria-hidden="true"></div>
+  <div id="toast" aria-live="assertive"></div>
+  <div class="bottom">
+    <div class="hint" id="hint">מתחיל מעקב…</div>
+    <button class="primary" id="btnFinish">סיים וצפה בהולוגרמה</button>
+  </div>
+</section>
+
+<section id="viewerUi" class="hidden" aria-label="צפייה בהולוגרמה">
+  <div class="stats">
+    <div class="stat"><b id="vVox">0</b><span>ריבועים</span></div>
+    <div class="stat"><b id="vArea">0</b><span>מ"ר מכוסה</span></div>
+    <div class="stat"><b id="vLvl">1</b><span>רמה</span></div>
+    <div class="stat"><b id="vTime">–</b><span>זמן</span></div>
+  </div>
+  <div class="bottom">
+    <div class="hint">גרור לסיבוב · צביטה לזום</div>
+    <div class="row">
+      <button id="btnMenu">תפריט</button>
+      <button id="btnRotate" aria-pressed="true">סיבוב אוטומטי</button>
+      <button class="primary" id="btnAgain">סריקה חדשה</button>
+    </div>
+  </div>
+</section>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ===== הגדרות =====
+const VOXEL = 0.06;          // גודל ריבוע במטרים
+const MAX = 60000;           // מקסימום ריבועים
+const OFF = 512;             // היסט לאינדקסים (טווח ±30 מ')
+const MIN_D = 0.25, MAX_D = 4.5; // טווח עומק אמין
+const GX = 18, GY = 30;      // רשת דגימת עומק לכל פריים
+const LEVELS = [300, 1500, 4000, 9000, 16000, 25000, 40000];
+const SAVE_KEY = 'holoscan:last';
+const $ = (id) => document.getElementById(id);
+
+// ===== רנדרר וסצנה =====
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x02060d, 1);
+renderer.xr.enabled = true;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.01, 200);
+camera.position.set(4, 3, 4);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 1.2;
+
+const grid = new THREE.GridHelper(20, 80, 0x27e8ff, 0x0b3a48);
+grid.material.transparent = true;
+grid.material.opacity = 0.35;
+scene.add(grid);
+
+// ===== חומר הולוגרמה: מסגרות זוהרות + קווי סריקה + פס סריקה נע =====
+const uniforms = { uTime: { value: 0 }, uSweep: { value: 0 } };
+const material = new THREE.ShaderMaterial({
+  uniforms, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  vertexShader: `
+    varying vec2 vUv; varying vec3 vColor; varying float vY;
+    void main() {
+      vUv = uv; vColor = instanceColor;
+      vec4 wp = modelMatrix * instanceMatrix * vec4(position, 1.0);
+      vY = wp.y;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }`,
+  fragmentShader: `
+    uniform float uTime, uSweep;
+    varying vec2 vUv; varying vec3 vColor; varying float vY;
+    void main() {
+      vec2 d = abs(vUv - 0.5) * 2.0;
+      float edge = smoothstep(0.62, 0.92, max(d.x, d.y));
+      float lines = 0.5 + 0.5 * sin(vY * 140.0 - uTime * 6.0);
+      float band = exp(-pow((vY - uSweep) * 7.0, 2.0));
+      float flick = 0.93 + 0.07 * sin(uTime * 41.0);
+      vec3 c = vColor * (0.18 + edge * 1.15 + lines * 0.12) + vec3(0.7, 1.0, 1.0) * band * 0.6;
+      gl_FragColor = vec4(c * flick, 0.15 + edge * 0.85);
+    }`,
+});
+
+const box = new THREE.BoxGeometry(VOXEL * 0.9, VOXEL * 0.9, VOXEL * 0.9);
+const mesh = new THREE.InstancedMesh(box, material, MAX);
+mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX * 3), 3).setUsage(THREE.DynamicDrawUsage);
+mesh.count = 0;
+mesh.frustumCulled = false;
+const holo = new THREE.Group();
+holo.add(mesh);
+scene.add(holo);
+
+// ===== מאגר ריבועים =====
+const hits = new Map();   // מפתח -> מספר פגיעות
+const columns = new Set(); // עמודות (x,z) לחישוב שטח
+let voxels = [];           // מפתחות שנוספו (לשמירה)
+let floorY = 0;
+let dirtyFrom = Infinity;
+let level = 0;
+let scanStart = 0, scanSeconds = 0;
+const tmpM = new THREE.Matrix4(), tmpC = new THREE.Color();
+
+const pack = (x, y, z) => (x << 20) | (y << 10) | z;
+
+function resetVoxels() {
+  hits.clear(); columns.clear(); voxels = [];
+  mesh.count = 0; dirtyFrom = Infinity; level = 0;
+}
+
+// הוספת ריבוע לפי אינדקסים (כבר מוזזים ב-OFF)
+function placeVoxel(x, y, z, key) {
+  const n = mesh.count;
+  if (n >= MAX) return false;
+  tmpM.makeTranslation((x - OFF + 0.5) * VOXEL, (y - OFF + 0.5) * VOXEL, (z - OFF + 0.5) * VOXEL);
+  mesh.setMatrixAt(n, tmpM);
+  // צבע לפי גובה: טורקיז ברצפה -> ורוד בתקרה
+  const h = THREE.MathUtils.clamp(((y - OFF) * VOXEL - floorY) / 2.6, 0, 1);
+  mesh.setColorAt(n, tmpC.setHSL(0.5 + h * 0.36, 1, 0.55));
+  mesh.count = n + 1;
+  dirtyFrom = Math.min(dirtyFrom, n);
+  voxels.push(key);
+  columns.add(x * 1024 + z);
+  return true;
+}
+
+// רישום נקודה בעולם; need = כמה פגיעות נדרשות לפני שמוצג (סינון רעש)
+function registerPoint(p, need) {
+  const x = Math.floor(p.x / VOXEL) + OFF, y = Math.floor(p.y / VOXEL) + OFF, z = Math.floor(p.z / VOXEL) + OFF;
+  if (x < 0 || y < 0 || z < 0 || x > 1023 || y > 1023 || z > 1023) return;
+  const key = pack(x, y, z);
+  const c = (hits.get(key) ?? 0) + 1;
+  if (c > need) return;
+  hits.set(key, c);
+  if (c === need) placeVoxel(x, y, z, key);
+}
+
+// העלאה ל-GPU רק של הטווח שהשתנה
+function flush() {
+  if (dirtyFrom >= mesh.count) return;
+  const n = mesh.count - dirtyFrom;
+  for (const [attr, size] of [[mesh.instanceMatrix, 16], [mesh.instanceColor, 3]]) {
+    attr.clearUpdateRanges();
+    attr.addUpdateRange(dirtyFrom * size, n * size);
+    attr.needsUpdate = true;
+  }
+  dirtyFrom = Infinity;
+}
+
+const area = () => (columns.size * VOXEL * VOXEL).toFixed(1);
+const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+// ===== שמירה / טעינה =====
+function save() {
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ floorY, seconds: scanSeconds, keys: voxels })); }
+  catch { /* אחסון מלא או חסום – מתעלמים */ }
+}
+function loadSaved() {
+  try {
+    const d = JSON.parse(localStorage.getItem(SAVE_KEY) ?? 'null');
+    return d && Array.isArray(d.keys) && d.keys.length ? d : null;
+  } catch { return null; }
+}
+function loadKeys(keys, fy) {
+  resetVoxels();
+  floorY = fy;
+  for (const k of keys) placeVoxel(k >>> 20, (k >>> 10) & 1023, k & 1023, k);
+}
+
+// ===== מצב הדגמה: חדר פרוצדורלי =====
+function buildDemo() {
+  resetVoxels();
+  floorY = 0;
+  const add = (px, py, pz) => {
+    if (Math.random() > 0.6) return; // חורים קטנים – נראה כמו סריקה אמיתית
+    const x = Math.floor(px / VOXEL) + OFF, y = Math.floor(py / VOXEL) + OFF, z = Math.floor(pz / VOXEL) + OFF;
+    const key = pack(x, y, z);
+    if (!hits.has(key)) { hits.set(key, 1); placeVoxel(x, y, z, key); }
+  };
+  const fill = (x0, x1, y0, y1, z0, z1, skip = () => false) => {
+    for (let x = x0; x <= x1; x += VOXEL) for (let y = y0; y <= y1; y += VOXEL) for (let z = z0; z <= z1; z += VOXEL)
+      if (!skip(x, y, z)) add(x, y, z);
+  };
+  const W = 2.4, D = 2, H = 2.5;
+  fill(-W, W, 0, 0, -D, D);                                                     // רצפה
+  fill(-W, W, 0, H, -D, -D, (x, y) => x > 0.4 && x < 1.6 && y > 0.9 && y < 1.9); // קיר עם חלון
+  fill(-W, -W, 0, H, -D, D, (x, y, z) => z > 0.3 && z < 1.2 && y < 2.05);       // קיר עם דלת
+  fill(W, W, 0, H, -D, D);                                                      // קיר ימני
+  fill(-0.6, 0.6, 0.72, 0.75, -0.3, 0.4);                                       // שולחן
+  for (const [lx, lz] of [[-0.55, -0.25], [0.55, -0.25], [-0.55, 0.35], [0.55, 0.35]]) fill(lx, lx, 0, 0.72, lz, lz);
+  fill(-1.8, 0.2, 0, 0.45, -1.95, -1.1);                                        // ספה
+  fill(-1.8, 0.2, 0.45, 0.9, -1.95, -1.75);
+  fill(1.9, 2.0, 0, 1.6, 1.3, 1.4);                                             // מנורה
+  fill(1.75, 2.15, 1.6, 1.85, 1.15, 1.55);
+  scanSeconds = 0;
+}
+
+// ===== מצבי מסך =====
+let mode = 'menu';
+function show(m) {
+  mode = m;
+  $('menu').classList.toggle('hidden', m !== 'menu');
+  $('arHud').classList.toggle('hidden', m !== 'ar');
+  $('viewerUi').classList.toggle('hidden', m !== 'view');
+  $('btnLast').classList.toggle('hidden', !loadSaved());
+  controls.enabled = m === 'view';
+  grid.visible = m !== 'ar';
+  renderer.setClearColor(0x02060d, m === 'ar' ? 0 : 1);
+}
+
+// מרכוז ההולוגרמה ומיקום מצלמה לצפייה
+function frameHologram() {
+  holo.position.set(0, 0, 0);
+  if (!voxels.length) return;
+  const b = new THREE.Box3(), v = new THREE.Vector3();
+  for (const k of voxels) b.expandByPoint(v.set((k >>> 20) - OFF, ((k >>> 10) & 1023) - OFF, (k & 1023) - OFF).multiplyScalar(VOXEL));
+  const c = b.getCenter(new THREE.Vector3()), s = b.getSize(new THREE.Vector3());
+  holo.position.set(-c.x, -b.min.y, -c.z);
+  hologramHeight = Math.max(s.y, 0.5);
+  const r = Math.max(s.x, s.y, s.z, 1);
+  controls.target.set(0, s.y / 2, 0);
+  camera.position.set(r * 1.5, r * 1.1, r * 1.5);
+  controls.update();
+}
+let hologramHeight = 2.5;
+
+function showViewer() {
+  frameHologram();
+  const n = voxels.length;
+  $('vVox').textContent = n.toLocaleString('he-IL');
+  $('vArea').textContent = area();
+  $('vLvl').textContent = String(LEVELS.filter((t) => n >= t).length + 1);
+  $('vTime').textContent = scanSeconds ? fmtTime(scanSeconds) : '–';
+  show('view');
+}
+
+// ===== סריקת AR =====
+let session = null, depthOK = false, hitSources = [], frameNo = 0;
+const invProj = new THREE.Matrix4(), camM = new THREE.Matrix4(), p = new THREE.Vector3();
+
+function setMsg(t) { $('msg').textContent = t; }
+
+async function startAR() {
+  setMsg('');
+  if (!window.isSecureContext) return setMsg('יש לפתוח את הדף בכתובת HTTPS כדי לגשת למצלמה ולחיישנים.');
+  const ok = navigator.xr && await navigator.xr.isSessionSupported('immersive-ar').catch(() => false);
+  if (!ok) return setMsg('המכשיר/הדפדפן לא תומך ב-WebXR AR. נדרש Chrome באנדרואיד עם ARCore (באייפון Safari לא תומך). אפשר לנסות את מצב ההדגמה.');
+  $('btnStart').disabled = true;
+  // חלק מהמכשירים דוחים את כל הבקשה אם פיצ'ר אופציונלי לא נתמך – מנסים מהמלא לפשוט
+  const overlay = { domOverlay: { root: $('arHud') } };
+  const depth = { depthSensing: { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha', 'float32'] } };
+  const configs = [
+    { optionalFeatures: ['depth-sensing', 'hit-test', 'dom-overlay', 'local-floor'], ...depth, ...overlay },
+    { optionalFeatures: ['hit-test', 'dom-overlay', 'local-floor'], ...overlay },
+    { optionalFeatures: ['hit-test', 'dom-overlay'], ...overlay },
+    { optionalFeatures: ['hit-test'] },
+    {},
+  ];
+  let lastErr = null;
+  session = null;
+  for (const cfg of configs) {
+    try { session = await navigator.xr.requestSession('immersive-ar', cfg); break; }
+    catch (e) { lastErr = e; }
+  }
+  if (!session) {
+    $('btnStart').disabled = false;
+    // אבחון הסיבה הסבירה
+    const ua = navigator.userAgent;
+    const why = location.protocol !== 'https:'
+      ? `הדף נפתח כקובץ מקומי (${location.protocol}) – AR עובד רק מקישור https:// אמיתי. העלה את הקובץ לאתר (GitHub Pages / Vercel / Netlify Drop) ופתח את הקישור.`
+      : /; wv\)|FBAN|FBAV|Instagram|WhatsApp|Telegram|Line\//.test(ua)
+        ? 'הדף נפתח בדפדפן פנימי של אפליקציה. לחץ ⋮ ← "פתח ב-Chrome".'
+        : !/Chrome\//.test(ua) || /SamsungBrowser|EdgA|OPR|Firefox/.test(ua)
+          ? 'הדפדפן אינו Chrome. פתח את הקישור ב-Google Chrome.'
+          : 'כנראה שהמכשיר לא נתמך ב-ARCore, או ש-"Google Play Services for AR" לא מותקן/מעודכן – עדכן אותו מחנות Play.';
+    return setMsg(`לא ניתן להפעיל AR (${lastErr?.message ?? lastErr}). ${why}`);
+  }
+  const feats = session.enabledFeatures ?? [];
+  const localFloor = feats.includes('local-floor');
+  depthOK = feats.includes('depth-sensing');
+  resetVoxels();
+  floorY = localFloor ? 0 : -1.3; // בלי local-floor: הראשית בגובה הטלפון
+  holo.position.set(0, 0, 0);
+  renderer.xr.setReferenceSpaceType(localFloor ? 'local-floor' : 'local');
+  try { await renderer.xr.setSession(session); }
+  catch (e) {
+    session.end().catch(() => {});
+    session = null;
+    $('btnStart').disabled = false;
+    return setMsg(`שגיאה בהפעלת התצוגה התלת־ממדית: ${e?.message ?? e}`);
+  }
+  session.addEventListener('end', onSessionEnd);
+  show('ar');
+
+  // גיבוי: בלי חיישן עומק – רשת קרני hit-test ממרכז המסך
+  hitSources = [];
+  if (!depthOK && feats.includes('hit-test')) {
+    try {
+      const viewer = await session.requestReferenceSpace('viewer');
+      for (let i = -3; i <= 3; i++) for (let j = -4; j <= 4; j++) {
+        const offsetRay = new XRRay({ x: 0, y: 0, z: 0, w: 1 }, { x: i * 0.09, y: j * 0.09, z: -1, w: 0 });
+        const src = await session.requestHitTestSource({ space: viewer, offsetRay, entityTypes: ['plane', 'point'] })
+          .catch(() => session.requestHitTestSource({ space: viewer, offsetRay }));
+        hitSources.push(src);
+      }
+    } catch { /* אין hit-test – נשאר רק מעקב */ }
+  }
+  $('mode').textContent = depthOK ? 'חיישן עומק פעיל – סריקה מלאה' : hitSources.length ? 'ללא חיישן עומק – סריקת משטחים בלבד (פחות מפורט)' : 'המכשיר לא מספק נתוני סביבה';
+  scanStart = performance.now();
+  frameNo = 0;
+  $('btnStart').disabled = false;
+}
+
+function scanFrame(frame) {
+  const ref = renderer.xr.getReferenceSpace();
+  const pose = ref && frame.getViewerPose(ref);
+  if (!pose) { $('hint').textContent = 'הזז את הטלפון לאט כדי שהמעקב יתחיל…'; return; }
+  frameNo++;
+
+  if (depthOK && frameNo % 2 === 0) {
+    const view = pose.views[0];
+    let depth = null;
+    try { depth = frame.getDepthInformation(view); } catch { depth = null; }
+    if (depth) {
+      invProj.fromArray(view.projectionMatrix).invert();
+      camM.fromArray(view.transform.matrix);
+      for (let i = 0; i < GX; i++) for (let j = 0; j < GY; j++) {
+        // דגימה עם ג'יטר כדי למלא חורים לאורך זמן
+        const u = (i + Math.random()) / GX, v = (j + Math.random()) / GY;
+        let d = 0;
+        try { d = depth.getDepthInMeters(u, v); } catch { continue; }
+        if (!(d > MIN_D && d < MAX_D)) continue;
+        p.set(u * 2 - 1, 1 - v * 2, -1).applyMatrix4(invProj);
+        p.multiplyScalar(d / -p.z).applyMatrix4(camM);
+        registerPoint(p, 2);
+      }
+    }
+  } else if (!depthOK) {
+    for (const src of hitSources) {
+      const r = frame.getHitTestResults(src)[0];
+      const pos = r?.getPose(ref)?.transform.position;
+      if (pos) registerPoint(pos, 1);
+    }
+  }
+
+  // עדכון HUD
+  const n = mesh.count;
+  scanSeconds = (performance.now() - scanStart) / 1000;
+  $('sVox').textContent = n.toLocaleString('he-IL');
+  $('sArea').textContent = area();
+  $('sTime').textContent = fmtTime(scanSeconds);
+  const lv = LEVELS.filter((t) => n >= t).length;
+  if (lv > level) {
+    level = lv;
+    $('sLvl').textContent = String(lv + 1);
+    $('sLvl').classList.remove('pulse'); void $('sLvl').offsetWidth; $('sLvl').classList.add('pulse');
+    toast(`רמה ${lv + 1}!`);
+    navigator.vibrate?.(80);
+  }
+  $('hint').textContent = n >= MAX ? 'הזיכרון מלא – סיים כדי לצפות בהולוגרמה'
+    : n < 200 ? 'כוון לקירות, לרצפה ולרהיטים והסתובב לאט'
+    : `המשך ללכת בבית – היעד הבא: ${(LEVELS[level] ?? MAX).toLocaleString('he-IL')} ריבועים`;
+}
+
+let toastT = 0;
+function toast(t) {
+  $('toast').textContent = t;
+  $('toast').classList.add('show');
+  clearTimeout(toastT);
+  toastT = setTimeout(() => $('toast').classList.remove('show'), 1400);
+}
+
+function onSessionEnd() {
+  session = null;
+  for (const s of hitSources) s?.cancel?.();
+  hitSources = [];
+  flush();
+  save();
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  showViewer();
+}
+
+// ===== לולאת רינדור =====
+renderer.setAnimationLoop((t, frame) => {
+  const time = t / 1000;
+  uniforms.uTime.value = time;
+  if (frame && mode === 'ar') {
+    scanFrame(frame);
+    uniforms.uSweep.value = floorY + ((time * 0.6) % 1) * 2.8;
+  } else {
+    uniforms.uSweep.value = ((time * 0.35) % 1) * (hologramHeight + 0.4) - 0.2;
+    controls.update();
+  }
+  flush();
+  renderer.render(scene, camera);
+});
+
+// ===== אירועים =====
+$('btnStart').onclick = startAR;
+$('btnAgain').onclick = () => { show('menu'); startAR(); };
+$('btnFinish').onclick = () => session?.end();
+$('btnMenu').onclick = () => show('menu');
+$('btnDemo').onclick = () => { buildDemo(); showViewer(); };
+$('btnLast').onclick = () => {
+  const d = loadSaved();
+  if (!d) return setMsg('לא נמצאה סריקה שמורה.');
+  loadKeys(d.keys, d.floorY ?? 0);
+  scanSeconds = d.seconds ?? 0;
+  showViewer();
+};
+$('btnRotate').onclick = (e) => {
+  controls.autoRotate = !controls.autoRotate;
+  e.currentTarget.setAttribute('aria-pressed', String(controls.autoRotate));
+};
+addEventListener('resize', () => {
+  if (renderer.xr.isPresenting) return;
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+});
+
+show('menu');
+</script>
+</body>
+</html>
